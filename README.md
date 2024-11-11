@@ -24,3 +24,7 @@ Main changes:
 ToDo:
 - Adapt the code from PyAudio to Python Jack Client (https://jackclient-python.readthedocs.io/en/0.5.5/)
 - Add FluidSynth to the Main program and connect it to the Looper
+
+Note: This is a "working" version of the adapted raspi-looper with pyAudio using 3 momentary buttons for Rec, Mute/Solo and Undo/Clear and 3 latched buttons (it is what I have at the moment, I will change them soon) for PrevLoop, NextLoop, and Mode (there is a Mode where FluidSynth runs an instance and PrevLoop and NextLoop Buttons changes the preset).
+Then I have made a first version using Jack Client but still doesn't work: https://github.com/modante/Raspi-Loop-Station/tree/Jack-Implementation
+I have a problem with buffers. I am not sure if the input buffer is been recorded on current_rec_buffer (line 540) or the play_buffer is been copied in the output_port.get_array() (line 616). The result is always silence. If you can help me, please, contact me.
