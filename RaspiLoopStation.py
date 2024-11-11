@@ -1,5 +1,5 @@
 print('Starting RaspiLoopStation...','\n')
-
+import jack
 import pyaudio
 import numpy as np
 import time
@@ -40,7 +40,7 @@ parameters = settings_file.readlines()
 settings_file.close()
 
 RATE = int(parameters[0]) #sample rate
-CHUNK = int(parameters[1]) #buffer size
+CHUNK = 512 #int(parameters[1]) #buffer size
 FORMAT = pyaudio.paInt16 #specifies bit depth (16-bit)
 CHANNELS = 1 #mono audio
 latency_in_milliseconds = int(parameters[2])
@@ -64,16 +64,17 @@ undo_was_held = False
 #os.system ("sudo -H -u raspi killall fluidsynth")
 print('Rate: ' + str(RATE) + ' / CHUNK: ' +  str(CHUNK),'\n')
 print('Latency correction (buffers): ' + str(LATENCY),'\n')
-print('Looking for devices')
+print('Looking for devices','\n')
 print('--- INDEVICE = ', str(INDEVICE),'\n')
 print('--- OUTDEVICE = ', str(OUTDEVICE),'\n')
 
 #UI do everything else
 
-#calling finish() will set finished flag, allowing program to break from loop at end of script and exit
+#Calling finish() will set finished flag, allowing program to break from loop at end of script and exit
 def finish():
     finished = True
 
+#Turn-Off all the Leds
 def poweroffleds():
     RECLEDR.off()
     RECLEDG.off()
@@ -87,7 +88,7 @@ def restart_looper():
     if MODE == 0:
         MODE = 1
         PRESET = 4
-        pa.terminate() #needed to free audio device for reuse
+        #pa.terminate() #needed to free audio device for reuse
         poweroffleds()
         time.sleep(2)
         display.value = str(PRESET)
@@ -205,9 +206,11 @@ PLAYBUTTON.when_released = setmute
 PLAYBUTTON.when_held = setsolo
 
 #buffer to hold mixed audio from all 4 tracks
-play_buffer = np.zeros([CHUNK], dtype = np.int16)
+#play_buffer = np.zeros([CHUNK], dtype = np.int16)
+
 #a buffer containing silence
-silence = np.zeros([CHUNK], dtype = np.int16)
+#silence = np.zeros([CHUNK], dtype = np.int16)
+
 #mixed output (sum of audio from tracks) is multiplied by output_volume before being played.
 #This is updated dynamically as max peak in resultant audio changes
 output_volume = np.float16(1.0)
@@ -221,7 +224,7 @@ def fade_in(buffer):
 def fade_out(buffer):
     np.multiply(buffer, down_ramp, out = buffer, casting = 'unsafe')
 
-pa = pyaudio.PyAudio()
+#pa = pyaudio.PyAudio()
 
 class audioloop:
     def __init__(self):
@@ -251,7 +254,6 @@ class audioloop:
 
     #increment_pointers() increments pointers and, when restarting while recording, advances dub ratio
     def increment_pointers(self):
-        #print('                                             Read Pointer = ', self.readp, '     ', end='\r')
         if self.readp == self.length - 1:
             self.readp = 0
             if self.is_recording:
@@ -260,6 +262,7 @@ class audioloop:
         else:
             self.readp = self.readp + 1
         self.writep = (self.writep + 1) % self.length
+        print('incrementing pointers')
 
     #initialize() raises self.length to closest integer multiple of LENGTH and initializes read and write pointers
     def initialize(self): #se inicializa cuando se termina de grabar la pista. No está inicializada después de hacer Clear.
@@ -463,7 +466,8 @@ class audioloop:
         debug()
 
 #defining ten audio loops. loops[0] is the master loop.
-loops = (audioloop(), audioloop(), audioloop(), audioloop(), audioloop(), audioloop(), audioloop(), audioloop(), audioloop(), audioloop())
+#loops = (audioloop(), audioloop(), audioloop(), audioloop(), audioloop(), audioloop(), audioloop(), audioloop(), audioloop(), audioloop())
+loops = [audioloop() for _ in range(10)]
 
 def debug():
     print('  |init\t|isrec\t|iswait\t|isplay\t|iswaiP\t|iswaiM\t|Solo')
@@ -474,44 +478,41 @@ def debug():
     print('setup_donerecording = ', setup_donerecording, ' setup_is_recording = ', setup_is_recording)
     print('length = ', loops[LOOPNUMBER].length, 'LENGTH = ', LENGTH, 'length_factor = ', loops[LOOPNUMBER].length_factor,'\n')
 
-#while looping, prev_rec_buffer keeps track of the audio buffer recorded before the current one
-prev_rec_buffer = np.zeros([CHUNK], dtype = np.int16)
-
 #update output volume to prevent mixing distortion due to sample overflow
 #slow to run, so should be called on a different thread (e.g. a button callback function)
 def update_volume(): #Not used
     print('---= Update Volume =---','\n')
     global output_volume
     peak = np.max(
-                  np.abs(
-                          loops[0].main_audio.astype(np.int32)[:][:]
-                        + loops[1].main_audio.astype(np.int32)[:][:]
-                        + loops[2].main_audio.astype(np.int32)[:][:]
-                        + loops[3].main_audio.astype(np.int32)[:][:]
-                        + loops[4].main_audio.astype(np.int32)[:][:]
-                        + loops[5].main_audio.astype(np.int32)[:][:]
-                        + loops[6].main_audio.astype(np.int32)[:][:]
-                        + loops[7].main_audio.astype(np.int32)[:][:]
-                        + loops[8].main_audio.astype(np.int32)[:][:]
-                        + loops[9].main_audio.astype(np.int32)[:][:]
-                        + loops[0].dub_audio.astype(np.int32)[:][:]
-                        + loops[1].dub_audio.astype(np.int32)[:][:]
-                        + loops[2].dub_audio.astype(np.int32)[:][:]
-                        + loops[3].dub_audio.astype(np.int32)[:][:]
-                        + loops[4].dub_audio.astype(np.int32)[:][:]
-                        + loops[5].dub_audio.astype(np.int32)[:][:]
-                        + loops[6].dub_audio.astype(np.int32)[:][:]
-                        + loops[7].dub_audio.astype(np.int32)[:][:]
-                        + loops[8].dub_audio.astype(np.int32)[:][:]
-                        + loops[9].dub_audio.astype(np.int32)[:][:]
-                        )
-                 )
+        np.abs(
+            loops[0].main_audio.astype(np.int32)[:][:]
+            + loops[1].main_audio.astype(np.int32)[:][:]
+            + loops[2].main_audio.astype(np.int32)[:][:]
+            + loops[3].main_audio.astype(np.int32)[:][:]
+            + loops[4].main_audio.astype(np.int32)[:][:]
+            + loops[5].main_audio.astype(np.int32)[:][:]
+            + loops[6].main_audio.astype(np.int32)[:][:]
+            + loops[7].main_audio.astype(np.int32)[:][:]
+            + loops[8].main_audio.astype(np.int32)[:][:]
+            + loops[9].main_audio.astype(np.int32)[:][:]
+            + loops[0].dub_audio.astype(np.int32)[:][:]
+            + loops[1].dub_audio.astype(np.int32)[:][:]
+            + loops[2].dub_audio.astype(np.int32)[:][:]
+            + loops[3].dub_audio.astype(np.int32)[:][:]
+            + loops[4].dub_audio.astype(np.int32)[:][:]
+            + loops[5].dub_audio.astype(np.int32)[:][:]
+            + loops[6].dub_audio.astype(np.int32)[:][:]
+            + loops[7].dub_audio.astype(np.int32)[:][:]
+            + loops[8].dub_audio.astype(np.int32)[:][:]
+            + loops[9].dub_audio.astype(np.int32)[:][:]
+        )
+    )
     print('     peak = ' + str(peak))
     if peak > SAMPLEMAX:
         output_volume = SAMPLEMAX / peak
     else:
         output_volume = 1
-    print('     output volume = ' + str(output_volume))
+    print(' --- output_volume = ' + str(output_volume))
 
 #show_status() checks which loops are recording/playing and lights up LEDs accordingly
 def show_status():
@@ -537,42 +538,60 @@ def show_status():
         PLAYLEDR.off()
         PLAYLEDG.off()
 
-def looping_callback(in_data, frame_count, time_info, status):
-    global play_buffer
-    global prev_rec_buffer
-    global setup_donerecording
-    global setup_is_recording
-    global LENGTH
-    current_rec_buffer = np.right_shift(np.frombuffer(in_data, dtype = np.int16), 1) #some input attenuation for overdub headroom purposes
-    #current_rec_buffer es el buffer (chunk) actual, tal como lo manda el flujo de stream_callback de PyAudio
+play_buffer = np.zeros([CHUNK], dtype = np.int16) #Buffer to hold mixed audio from all tracks
+silence = np.zeros([CHUNK], dtype = np.int16) #A buffer containing silence
+current_rec_buffer = np.zeros([CHUNK], dtype=np.int16) #Buffer to hold in_data
+prev_rec_buffer = np.zeros([CHUNK], dtype = np.int16) #While looping, prev_rec_buffer keeps track of the audio buffer recorded before the current one
 
-    #SETUP: FIRST RECORDING
-    #if setup is not done i.e. if the master loop hasn't been recorded to yet
-    if not setup_donerecording:
+# Initializing JACK Client
+client = jack.Client("RaspiLoopStation")
+if client.status.server_started:
+    print('----- JACK server started')
+
+# Registering Ins/Outs Ports
+input_port = client.inports.register("input_1")
+print('----- Jack Client In Port Registered-----', str(input_port), '\n')
+
+output_port = client.outports.register("output_1")
+print('----- Jack Client Out Port Registered-----', str(output_port),'\n')
+
+# Callback de procesamiento de audio
+@client.set_process_callback
+def looping_callback(frames):
+    global play_buffer, current_rec_buffer, prev_rec_buffer
+    global setup_donerecording, setup_is_recording
+    global LENGTH
+
+     # Read input buffer from JACK
+    #in_data = input_port.get_array()[:].tobytes()
+    current_rec_buffer[:] = np.right_shift(np.frombuffer(input_port.get_array()[:].tobytes(), dtype=np.int16), 1)
+
+    # Setup: First Recording
+    if not setup_donerecording: #if setup is not done i.e. if the master loop hasn't been recorded to yet
         RECLEDR.on()
         RECLEDG.on()
         PLAYLEDR.off()
         PLAYLEDG.off()
-        #if setup is currently recording, that recording action happens in the following lines
-        if setup_is_recording:
+
+        if setup_is_recording: #if setup is currently recording, that recording action happens in the following lines
             RECLEDR.on()
             RECLEDG.off()
             PLAYLEDR.off()
             PLAYLEDG.off()
-            #if the max allowed loop length is exceeded, stop recording and start looping
-            if LENGTH >= MAXLENGTH:
+
+            if LENGTH >= MAXLENGTH: #if the max allowed loop length is exceeded, stop recording and start looping
                 print('Overflow')
                 setup_donerecording = True
                 setup_is_recording = False
-                return(silence, pyaudio.paContinue)
+                return
+
             #otherwise append incoming audio to master loop, increment LENGTH and continue
             loops[0].add_buffer(current_rec_buffer)
-            LENGTH = LENGTH + 1
-            return(silence, pyaudio.paContinue)
-
+            LENGTH += 1
+            return silence
         #if setup not done and not currently happening then just wait
         else:
-            return(silence, pyaudio.paContinue)
+            return silence
     #execution ony reaches here if setup (first loop record and set LENGTH) finished.
 
     #when master loop restarts, start recording on any other tracks that are waiting
@@ -581,61 +600,42 @@ def looping_callback(in_data, frame_count, time_info, status):
         for loop in loops:
             if loop.is_waiting:
                 loop.start_recording(prev_rec_buffer)
-                print('---=Recording Track number: ', LOOPNUMBER, ' =---','\n')
+                print('---=Recording Track number:', LOOPNUMBER, '=---','\n')
 
-    #if master loop is waiting just start recording without checking restart
+     #if master loop is waiting just start recording without checking restart
     if loops[0].is_waiting and not loops[0].initialized:
-            loops[0].start_recording(prev_rec_buffer)
-            print('????? if master loop is waiting just start recording without checking restart')
+        loops[0].start_recording(prev_rec_buffer)
+        print('????? if master loop is waiting just start recording without checking restart')
 
     #if a loop is recording, check initialization and accordingly append or overdub
-    for loop in loops:
-        if loop.is_recording:
-            #RECLEDR.on()
-            #RECLEDG.off()
-            if loop.initialized:
-                print('------------------------------------------------=OverDub=-', end='\r')
-                loop.dub(current_rec_buffer)
-            else:
-                print('------------------------------------------------=Append=-', end='\r')
+        for loop in loops:
+            if loop.is_recording:
+                if loop.initialized:
+                    print('------------------------------------------------=OverDub=-', end='\r')
+                    loop.dub(current_rec_buffer)
+                else:
+                    print('------------------------------------------------=Append=-', end='\r')
                 loop.add_buffer(current_rec_buffer)
 
     #add to play_buffer only one-fourth of each audio signal times the output_volume
     play_buffer[:] = np.multiply((
-                                   loops[0].read().astype(np.int32)[:]
-                                 + loops[1].read().astype(np.int32)[:]
-                                 + loops[2].read().astype(np.int32)[:]
-                                 + loops[3].read().astype(np.int32)[:]
-                                 + loops[4].read().astype(np.int32)[:]
-                                 + loops[5].read().astype(np.int32)[:]
-                                 + loops[6].read().astype(np.int32)[:]
-                                 + loops[7].read().astype(np.int32)[:]
-                                 + loops[8].read().astype(np.int32)[:]
-                                 + loops[9].read().astype(np.int32)[:]
-                                 ), output_volume, out= None, casting = 'unsafe').astype(np.int16)
+        loops[0].read().astype(np.int32)
+        + loops[1].read().astype(np.int32)
+        + loops[2].read().astype(np.int32)
+        + loops[3].read().astype(np.int32)
+        + loops[4].read().astype(np.int32)
+        + loops[5].read().astype(np.int32)
+        + loops[6].read().astype(np.int32)
+        + loops[7].read().astype(np.int32)
+        + loops[8].read().astype(np.int32)
+        + loops[9].read().astype(np.int32)
+    ), output_volume, out=None, casting='unsafe').astype(np.int16)
 
     #current buffer will serve as previous in next iteration
     prev_rec_buffer = np.copy(current_rec_buffer)
+
     #play mixed audio and move on to next iteration
-    return(play_buffer, pyaudio.paContinue)
-
-#now initializing looping_stream (the only audio stream)
-looping_stream = pa.open(
-    format = FORMAT,
-    channels = CHANNELS,
-    rate = RATE,
-    input = True,
-    output = True,
-    input_device_index = INDEVICE,
-    output_device_index = OUTDEVICE,
-    frames_per_buffer = CHUNK,
-    start = True,
-    stream_callback = looping_callback
-)
-
-#audio stream has now been started and the callback function is running in a background thread.
-#first, we give the stream some time to properly start up
-time.sleep(2)
+    output_port.get_array()[:] = play_buffer[:]
 
 #then we turn on all lights to indicate that looper is ready to start looping
 print('----- Ready -----','\n')
@@ -644,15 +644,33 @@ RECLEDG.on()
 PLAYLEDR.off()
 PLAYLEDG.off()
 debug()
-
 #once all LEDs are on, we wait for the master loop record button to be pressed
 print('---Waiting for Record Button---','\n')
 
-#this while loop runs during the jam session.
-while not finished:
-    if MODE == 0:
-        show_status()
-    time.sleep(0.1)
+@client.set_shutdown_callback
+def shutdown(status, reason):
+    print("JACK shutdown:", reason, status)
 
-pa.terminate()
-print('Done...')
+with client:
+    capture = client.get_ports(is_physical=True, is_output=True)
+    print(capture, '\n')
+    if not capture:
+        raise RuntimeError("No physical capture ports")
+
+    for src, dest in zip(capture, client.inports):
+        client.connect(src, dest)
+
+    playback = client.get_ports(is_physical=True, is_input=True)
+    print(playback, '\n')
+    if not playback:
+        raise RuntimeError("No physical playback ports")
+
+    for src, dest in zip(client.outports, playback):
+        client.connect(src, dest)
+
+    print("Press Ctrl+C to stop")
+    try:
+        print("Pressssss")
+        show_status()
+    except KeyboardInterrupt:
+        print("\nInterrupted by user")
