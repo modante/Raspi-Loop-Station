@@ -126,7 +126,7 @@ def prevloop():
             LOOPNUMBER = 9
         else:
             LOOPNUMBER = LOOPNUMBER-1
-        print('-= Last Loop =---> ', LOOPNUMBER,'\n')
+        print('-= Prev Loop =---> ', LOOPNUMBER,'\n')
     if MODE == 2:
         if PRESET >= 1:
             PRESET = PRESET-1
