@@ -65,9 +65,31 @@ print('Latency correction (buffers): ' + str(LATENCY),'\n')
 
 #UI do everything else
 
-def DeactivateJack():
-    print("Desactivando cliente JACK.")
-    client.deactivate()
+def pcm2float(sig, dtype='float64'):
+    sig = np.asarray(sig)
+    if sig.dtype.kind not in 'iu':
+        raise TypeError("'sig' must be an array of integers")
+    dtype = np.dtype(dtype)
+    if dtype.kind != 'f':
+        raise TypeError("'dtype' must be a floating point type")
+
+    i = np.iinfo(sig.dtype)
+    abs_max = 2 ** (i.bits - 1)
+    offset = i.min + abs_max
+    return (sig.astype(dtype) - offset) / abs_max
+
+def float2pcm(sig, dtype='int16'):
+    sig = np.asarray(sig)
+    if sig.dtype.kind != 'f':
+        raise TypeError("'sig' must be a float array")
+    dtype = np.dtype(dtype)
+    if dtype.kind not in 'iu':
+        raise TypeError("'dtype' must be an integer type")
+
+    i = np.iinfo(dtype)
+    abs_max = 2 ** (i.bits - 1)
+    offset = i.min + abs_max
+    return (sig * abs_max + offset).clip(i.min, i.max).astype(dtype)
 
 #Turn-Off all the Leds
 def PowerOffLeds():
@@ -83,7 +105,6 @@ def restart_looper():
     if MODE == 0:
         MODE = 1
         PRESET = 4
-        DeactivateJack()
         PowerOffLeds()
         time.sleep(1)
         display.value = str(PRESET)
@@ -542,7 +563,9 @@ def looping_callback(frames):
     global LENGTH
 
     # Read input buffer from JACK
-    current_rec_buffer[:] = input_port.get_array()[:]
+    current_rec_buffer = float2pcm(input_port.get_array())
+    #print('current_rec_buffer: ',current_rec_buffer.shape, end='\r')
+    #print(current_rec_buffer)
 
     # Setup: First Recording
     if not setup_donerecording: #if setup is not done i.e. if the master loop hasn't been recorded to yet
@@ -586,13 +609,13 @@ def looping_callback(frames):
         print('????? if master loop is waiting just start recording without checking restart')
 
     #if a loop is recording, check initialization and accordingly append or overdub
-        for loop in loops:
-            if loop.is_recording:
-                if loop.initialized:
-                    print('------------------------------------------------=OverDub=-', end='\r')
-                    loop.dub(current_rec_buffer)
-                else:
-                    print('------------------------------------------------=Append=-', end='\r')
+    for loop in loops:
+        if loop.is_recording:
+            if loop.initialized:
+                print('------------------------------------------------=OverDub=-', end='\r')
+                loop.dub(current_rec_buffer)
+            else:
+                print('------------------------------------------------=Append=-', end='\r')
                 loop.add_buffer(current_rec_buffer)
 
     #add to play_buffer only one-fourth of each audio signal times the output_volume
@@ -613,17 +636,7 @@ def looping_callback(frames):
     prev_rec_buffer = np.copy(current_rec_buffer)
 
     #play mixed audio and move on to next iteration
-    output_port.get_array()[:] = play_buffer[:]
-
-#then we turn on all lights to indicate that looper is ready to start looping
-print('----- Ready -----','\n')
-RECLEDR.on()
-RECLEDG.on()
-PLAYLEDR.off()
-PLAYLEDG.off()
-#once all LEDs are on, we wait for the master loop record button to be pressed
-print('---Waiting for Record Button---','\n')
-debug()
+    output_port.get_array()[:] = pcm2float(play_buffer[:])
 
 @client.set_shutdown_callback
 def shutdown(status, reason):
@@ -658,7 +671,16 @@ with client:
     for dest in playback:
         client.connect(output_port, dest)
 
-    print("Press Ctrl+C to stop")
+    #then we turn on Green and Red lights of REC Button to indicate that looper is ready to start looping
+    print('----- Ready -----','\n')
+    RECLEDR.on()
+    RECLEDG.on()
+    PLAYLEDR.off()
+    PLAYLEDG.off()
+    #once all LEDs are on, we wait for the master loop record button to be pressed
+    print('---Waiting for Record Button---','\n')
+    debug()
+
     try:
         print("Cliente JACK activo. Presiona Ctrl+C para detener.")
         while True:
@@ -666,11 +688,11 @@ with client:
                 show_status()
             elif MODE == 1:
                 MODE = 2
-                DeactivateJack()
             time.sleep(0.1)
             pass  # Keep Client executing
 
     except KeyboardInterrupt:
-        DeactivateJack()
+        print("Desactivando cliente JACK.")
+        client.deactivate()
         PowerOffLeds()
         print('Done...')
