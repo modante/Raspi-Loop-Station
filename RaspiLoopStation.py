@@ -40,7 +40,7 @@ parameters = settings_file.readlines()
 settings_file.close()
 
 RATE = int(parameters[0]) #sample rate
-CHUNK = 512 #int(parameters[1]) #buffer size
+CHUNK = int(parameters[1]) #buffer size
 FORMAT = pyaudio.paInt16 #specifies bit depth (16-bit)
 CHANNELS = 1 #mono audio
 latency_in_milliseconds = int(parameters[2])
@@ -57,25 +57,20 @@ setup_is_recording = False #set to True when track 1 recording button is first p
 setup_donerecording = False #set to true when first track 1 recording is done
 MODE = int(0)
 PRESET = int (4)
-finished = False
 play_was_held = False
 undo_was_held = False
 
-#os.system ("sudo -H -u raspi killall fluidsynth")
 print('Rate: ' + str(RATE) + ' / CHUNK: ' +  str(CHUNK),'\n')
 print('Latency correction (buffers): ' + str(LATENCY),'\n')
-print('Looking for devices','\n')
-print('--- INDEVICE = ', str(INDEVICE),'\n')
-print('--- OUTDEVICE = ', str(OUTDEVICE),'\n')
 
 #UI do everything else
 
-#Calling finish() will set finished flag, allowing program to break from loop at end of script and exit
-def finish():
-    finished = True
+def DeactivateJack():
+    print("Desactivando cliente JACK.")
+    client.deactivate()
 
 #Turn-Off all the Leds
-def poweroffleds():
+def PowerOffLeds():
     RECLEDR.off()
     RECLEDG.off()
     PLAYLEDR.off()
@@ -88,18 +83,19 @@ def restart_looper():
     if MODE == 0:
         MODE = 1
         PRESET = 4
-        #pa.terminate() #needed to free audio device for reuse
-        poweroffleds()
-        time.sleep(2)
+        DeactivateJack()
+        PowerOffLeds()
+        time.sleep(1)
         display.value = str(PRESET)
-        cmd = "sudo -H -u raspi ./sf.sh"
-        os.system (cmd)
+        os.system ("sudo -H -u raspi killall fluidsynth")
+        os.system ("sudo -H -u raspi fluidsynth -isj -a jack -r 48000 -g 0.9 -o 'midi.driver=jack' -o 'audio.jack.autoconnect=True' -o 'shell.port=9988' -f ./sf.conf /usr/share/sounds/sf2/FluidR3_GM.sf2 &")
         return
-    if MODE == 1:
+    if MODE == 2:
         MODE = 0
         time.sleep(2)
         os.system ("sudo -H -u raspi killall fluidsynth")
-        os.execlp('python3', 'python3', 'RaspiLoopStation.py') #replaces current process with a new instance of the same script
+        client.activate()
+        #os.execlp('python3', 'python3', 'RaspiLoopStation.py') #replaces current process with a new instance of the same script
 
 def prevloop():
     global PRESET
@@ -110,7 +106,7 @@ def prevloop():
         else:
             LOOPNUMBER = LOOPNUMBER-1
         print('-= Last Loop =---> ', LOOPNUMBER,'\n')
-    if MODE == 1:
+    if MODE == 2:
         if PRESET >= 1:
             PRESET = PRESET-1
             display.value = (str(PRESET))[-1]
@@ -130,7 +126,7 @@ def nextloop():
         else:
             LOOPNUMBER = LOOPNUMBER+1
         print('-= Next Loop =---> ', LOOPNUMBER,'\n')
-    if MODE == 1:
+    if MODE == 2:
         if PRESET <= 126:
             PRESET = PRESET+1
             display.value = (str(PRESET))[-1]
@@ -145,7 +141,7 @@ def setrecord():
     global PRESET
     if MODE == 0:
         loops[LOOPNUMBER].set_recording()
-    if MODE == 1:
+    if MODE == 2:
         if PRESET >= 10:
             PRESET = PRESET-10
         changepreset()
@@ -157,7 +153,7 @@ def setmute():
         if not play_was_held:
             loops[LOOPNUMBER].toggle_mute()
         play_was_held = False
-    if MODE == 1:
+    if MODE == 2:
         if PRESET <= 110:
             PRESET = PRESET+10
         changepreset()
@@ -199,17 +195,11 @@ NEXTBUTTON.when_released = nextloop
 RESTARTBUTTON.when_released = restart_looper
 RESTARTBUTTON.when_pressed = restart_looper
 RECBUTTON.when_pressed = setrecord
-#RECBUTTON.when_held = setrecord
+#RECBUTTON.when_held =
 UNDOBUTTON.when_released = setundo
 UNDOBUTTON.when_held = setclear
 PLAYBUTTON.when_released = setmute
 PLAYBUTTON.when_held = setsolo
-
-#buffer to hold mixed audio from all 4 tracks
-#play_buffer = np.zeros([CHUNK], dtype = np.int16)
-
-#a buffer containing silence
-#silence = np.zeros([CHUNK], dtype = np.int16)
 
 #mixed output (sum of audio from tracks) is multiplied by output_volume before being played.
 #This is updated dynamically as max peak in resultant audio changes
@@ -262,7 +252,6 @@ class audioloop:
         else:
             self.readp = self.readp + 1
         self.writep = (self.writep + 1) % self.length
-        print('incrementing pointers')
 
     #initialize() raises self.length to closest integer multiple of LENGTH and initializes read and write pointers
     def initialize(self): #se inicializa cuando se termina de grabar la pista. No está inicializada después de hacer Clear.
@@ -294,8 +283,8 @@ class audioloop:
             self.length = 0
             print('loop full')
             return
-        self.main_audio[self.length, :] = np.copy(data) #Añade a main_audio el buffer q actualmente está entrando por PyAudio
-        self.length = self.length + 1 #Incrementa el puntero de longitud del
+        self.main_audio[self.length, :] = np.copy(data) #Add to main_audio the buffer q actualmente está entrando por PyAudio
+        self.length = self.length + 1 #Increase the length of the loop
 
     def toggle_mute(self):
         print('-=Toggle Mute=-','\n')
@@ -466,15 +455,12 @@ class audioloop:
         debug()
 
 #defining ten audio loops. loops[0] is the master loop.
-#loops = (audioloop(), audioloop(), audioloop(), audioloop(), audioloop(), audioloop(), audioloop(), audioloop(), audioloop(), audioloop())
 loops = [audioloop() for _ in range(10)]
 
 def debug():
     print('  |init\t|isrec\t|iswait\t|isplay\t|iswaiP\t|iswaiM\t|Solo')
-    print('0 |', int(loops[0].initialized), '\t|', int(loops[0].is_recording), '\t|', int(loops[0].is_waiting), '\t|', int(loops[0].is_playing), '\t|', int(loops[0].is_waiting_play), '\t|', int(loops[0].is_waiting_mute), '\t|', int(loops[0].is_solo))
-    print('0 |', int(loops[1].initialized), '\t|', int(loops[1].is_recording), '\t|', int(loops[1].is_waiting), '\t|', int(loops[1].is_playing), '\t|', int(loops[1].is_waiting_play), '\t|', int(loops[1].is_waiting_mute), '\t|', int(loops[1].is_solo))
-    print('0 |', int(loops[2].initialized), '\t|', int(loops[2].is_recording), '\t|', int(loops[2].is_waiting), '\t|', int(loops[2].is_playing), '\t|', int(loops[2].is_waiting_play), '\t|', int(loops[2].is_waiting_mute), '\t|', int(loops[2].is_solo))
-    print('0 |', int(loops[3].initialized), '\t|', int(loops[3].is_recording), '\t|', int(loops[3].is_waiting), '\t|', int(loops[3].is_playing), '\t|', int(loops[3].is_waiting_play), '\t|', int(loops[3].is_waiting_mute), '\t|', int(loops[3].is_solo))
+    for i in range(4):
+        print(i, ' |', int(loops[i].initialized), '\t|', int(loops[i].is_recording), '\t|', int(loops[i].is_waiting), '\t|', int(loops[i].is_playing), '\t|', int(loops[i].is_waiting_play), '\t|', int(loops[i].is_waiting_mute), '\t|', int(loops[i].is_solo))
     print('setup_donerecording = ', setup_donerecording, ' setup_is_recording = ', setup_is_recording)
     print('length = ', loops[LOOPNUMBER].length, 'LENGTH = ', LENGTH, 'length_factor = ', loops[LOOPNUMBER].length_factor,'\n')
 
@@ -540,20 +526,13 @@ def show_status():
 
 play_buffer = np.zeros([CHUNK], dtype = np.int16) #Buffer to hold mixed audio from all tracks
 silence = np.zeros([CHUNK], dtype = np.int16) #A buffer containing silence
-current_rec_buffer = np.zeros([CHUNK], dtype=np.int16) #Buffer to hold in_data
+current_rec_buffer = np.zeros([CHUNK], dtype = np.int16) #Buffer to hold in_data
 prev_rec_buffer = np.zeros([CHUNK], dtype = np.int16) #While looping, prev_rec_buffer keeps track of the audio buffer recorded before the current one
 
 # Initializing JACK Client
 client = jack.Client("RaspiLoopStation")
 if client.status.server_started:
-    print('----- JACK server started')
-
-# Registering Ins/Outs Ports
-input_port = client.inports.register("input_1")
-print('----- Jack Client In Port Registered-----', str(input_port), '\n')
-
-output_port = client.outports.register("output_1")
-print('----- Jack Client Out Port Registered-----', str(output_port),'\n')
+    print('----- JACK server started', '\n')
 
 # Callback de procesamiento de audio
 @client.set_process_callback
@@ -562,9 +541,8 @@ def looping_callback(frames):
     global setup_donerecording, setup_is_recording
     global LENGTH
 
-     # Read input buffer from JACK
-    #in_data = input_port.get_array()[:].tobytes()
-    current_rec_buffer[:] = np.right_shift(np.frombuffer(input_port.get_array()[:].tobytes(), dtype=np.int16), 1)
+    # Read input buffer from JACK
+    current_rec_buffer[:] = input_port.get_array()[:]
 
     # Setup: First Recording
     if not setup_donerecording: #if setup is not done i.e. if the master loop hasn't been recorded to yet
@@ -588,10 +566,10 @@ def looping_callback(frames):
             #otherwise append incoming audio to master loop, increment LENGTH and continue
             loops[0].add_buffer(current_rec_buffer)
             LENGTH += 1
-            return silence
+            return
         #if setup not done and not currently happening then just wait
         else:
-            return silence
+            return
     #execution ony reaches here if setup (first loop record and set LENGTH) finished.
 
     #when master loop restarts, start recording on any other tracks that are waiting
@@ -643,34 +621,56 @@ RECLEDR.on()
 RECLEDG.on()
 PLAYLEDR.off()
 PLAYLEDG.off()
-debug()
 #once all LEDs are on, we wait for the master loop record button to be pressed
 print('---Waiting for Record Button---','\n')
+debug()
 
 @client.set_shutdown_callback
 def shutdown(status, reason):
     print("JACK shutdown:", reason, status)
 
 with client:
-    capture = client.get_ports(is_physical=True, is_output=True)
+    # Getting Jack buffer size
+    buffer_size = client.blocksize
+    print("Tamaño del buffer JACK (entrada y salida):", buffer_size, '\n')
+
+    # Registering Ins/Outs Ports
+    input_port = client.inports.register("input_1")
+    print('----- Jack Client In Port Registered-----\n', str(input_port), '\n')
+    output_port = client.outports.register("output_1")
+    print('----- Jack Client Out Port Registered-----\n', str(output_port),'\n')
+
+    #Assign all the Capture ports to Looper Input
+    capture = client.get_ports(is_audio=True, is_physical=True, is_output=True)
     print(capture, '\n')
     if not capture:
         raise RuntimeError("No physical capture ports")
 
-    for src, dest in zip(capture, client.inports):
-        client.connect(src, dest)
+    for src in capture:
+        client.connect(src, input_port)
 
-    playback = client.get_ports(is_physical=True, is_input=True)
+    #Assign the Looper Output to all the Playback ports
+    playback = client.get_ports(is_audio=True, is_physical=True, is_input=True)
     print(playback, '\n')
     if not playback:
         raise RuntimeError("No physical playback ports")
 
-    for src, dest in zip(client.outports, playback):
-        client.connect(src, dest)
+    for dest in playback:
+        client.connect(output_port, dest)
 
     print("Press Ctrl+C to stop")
     try:
-        print("Pressssss")
-        show_status()
+        print("Cliente JACK activo. Presiona Ctrl+C para detener.")
+        while True:
+            if MODE == 0:
+                show_status()
+            elif MODE == 1:
+                MODE = 2
+                DeactivateJack()
+            time.sleep(0.1)
+            pass  # Keep Client executing
+
     except KeyboardInterrupt:
-        print("\nInterrupted by user")
+        DeactivateJack()
+        PowerOffLeds()
+        print('Done...')
