@@ -4,17 +4,17 @@ Inspired on the great Raspi Looper from RandomVertebrate https://github.com/Rand
 
 Main changes:
 - New design from 8 buttons (Rec/Mute for each track) to 6 Buttons: Rec, Mute, Undo/Clear, Next Loop, Prev Loop and Mode.
-  - Mode Button: Switches from Looper Mode to FluidSynth Mode.
-  - Rec Button:
+  - **Mode Button:** Switches from Looper Mode to FluidSynth Mode.
+  - **Rec Button:**
     - Press to Record. Press again to Stop Recording (Looper Mode) / Decrease 10 preset numbers (FluidSynth Mode)
-  - Mute/Solo Button:
+  - **Mute/Solo Button:**
     - Press to Mute. Press again to UnMute (Looper Mode) / Increase 10 preset numbers (FluidSynth Mode)
     - Hold to Solo. Hold again to UnSolo
-  - Undo/Clear Button:
+  - **Undo/Clear Button:**
     - Press to Undo
     - Hold to Clear track (if track 0 is selected, Reset all the Looper)
-  - Prev Button: Jumps to the prev track (Looper Mode) / Decrease 1 preset number (FluidSynth Mode)
-  - Next Button: Jumps to the next track (Looper Mode) / Increase 1 preset number (FluidSynth Mode)
+  - **Prev Button:** Jumps to the prev track (Looper Mode) / Decrease 1 preset number (FluidSynth Mode)
+  - **Next Button:** Jumps to the next track (Looper Mode) / Increase 1 preset number (FluidSynth Mode)
 - Added a 7 segments display to show the Track number (0-9) (Looper Mode) or the last digit of GM selected preset (when FluidSynth Mode)
 - Support for 10 tracks (originally only 4) and could be increased till the limits of resources/latency.
 - Mute/Solo waits till the starting of the Master Track to execute it
