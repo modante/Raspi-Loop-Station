@@ -7,6 +7,7 @@ import os
 from gpiozero import LED, Button, LEDCharDisplay
 from time import sleep
 
+#Logging to file ./RaspiLoopStation.log
 import logging
 import mylib
 logger = logging.getLogger(__name__)
@@ -20,25 +21,12 @@ def main():
 if __name__ == '__main__':
     main()
 
-debounce_length = 0.1 #length in seconds of button debounce period
-display = LEDCharDisplay(11, 25, 9, 10, 24, 22, 23, dp=27)
-PLAYLEDR = (LED(26, active_high=False))
-PLAYLEDG = (LED(20, active_high=False))
-RECLEDR = (LED(0, active_high=False))
-RECLEDG = (LED(1, active_high=False))
-PLAYBUTTON = (Button(17, bounce_time = debounce_length))
-RECBUTTON = (Button(18, bounce_time = debounce_length))
-UNDOBUTTON = (Button(15, bounce_time = debounce_length))
-PREVBUTTON = (Button(5, bounce_time = debounce_length))
-NEXTBUTTON = (Button(12, bounce_time = debounce_length))
-RESTARTBUTTON = (Button(6, bounce_time = debounce_length))
-PLAYBUTTON.hold_time = 0.5
-
 #get configuration (audio settings etc.) from file
 settings_file = open('Config/settings.prt', 'r')
 parameters = settings_file.readlines()
 settings_file.close()
 
+#Variables Initialization
 RATE = int(parameters[0]) #sample rate
 CHUNK = int(parameters[1]) #buffer size
 FORMAT = pyaudio.paInt16 #specifies bit depth (16-bit)
@@ -52,19 +40,52 @@ OVERSHOOT = round((overshoot_in_milliseconds/1000) * (RATE/CHUNK)) #allowance in
 MAXLENGTH = int(12582912 / CHUNK) #96mb of audio in total
 SAMPLEMAX = 0.9 * (2**15) #maximum possible value for an audio sample (little bit of margin)
 LENGTH = 0 #length of the first recording on track 1, all subsequent recordings quantized to a multiple of this.
-LOOPNUMBER = int(0) #Pointer to the selected loop
+LoopNumber = int(0) #Pointer to the selected loop
 setup_is_recording = False #set to True when track 1 recording button is first pressed
 setup_donerecording = False #set to true when first track 1 recording is done
-MODE = int(0)
-PRESET = int (4)
 play_was_held = False
 undo_was_held = False
-
+Mode = int(0)
+Preset = int (4)
 print('Rate: ' + str(RATE) + ' / CHUNK: ' +  str(CHUNK),'\n')
 print('Latency correction (buffers): ' + str(LATENCY),'\n')
 
-#UI do everything else
+#mixed output (sum of audio from tracks) is multiplied by output_volume before being played.
+#This is updated dynamically as max peak in resultant audio changes
+output_volume = np.float16(1.0)
+#multiplying by up_ramp and down_ramp gives fade-in and fade-out
+down_ramp = np.linspace(1, 0, CHUNK)
+up_ramp = np.linspace(0, 1, CHUNK)
 
+#Buttons, Leds and 8-Segments Display
+debounce_length = 0.1 #length in seconds of button debounce period
+display = LEDCharDisplay(11, 25, 9, 10, 24, 22, 23, dp=27)
+PLAYLEDR = (LED(26, active_high=False))
+PLAYLEDG = (LED(20, active_high=False))
+RECLEDR = (LED(0, active_high=False))
+RECLEDG = (LED(1, active_high=False))
+PLAYBUTTON = (Button(17, bounce_time = debounce_length))
+RECBUTTON = (Button(18, bounce_time = debounce_length))
+UNDOBUTTON = (Button(15, bounce_time = debounce_length))
+PREVBUTTON = (Button(5, bounce_time = debounce_length))
+NEXTBUTTON = (Button(12, bounce_time = debounce_length))
+MODEBUTTON = (Button(6, bounce_time = debounce_length))
+PLAYBUTTON.hold_time = 0.5
+RECBUTTON.hold_time = 0.5
+UNDOBUTTON.hold_time = 0.5
+PREVBUTTON.hold_time = 0.5
+NEXTBUTTON.hold_time = 0.5
+MODEBUTTON.hold_time = 0.5
+
+#fade_in() applies fade-in to a buffer
+def fade_in(buffer):
+    np.multiply(buffer, up_ramp, out = buffer, casting = 'unsafe')
+
+#fade_out() applies fade-out to a buffer
+def fade_out(buffer):
+    np.multiply(buffer, down_ramp, out = buffer, casting = 'unsafe')
+
+#Converts pcm2float array
 def pcm2float(sig, dtype='float64'):
     sig = np.asarray(sig)
     if sig.dtype.kind not in 'iu':
@@ -78,6 +99,7 @@ def pcm2float(sig, dtype='float64'):
     offset = i.min + abs_max
     return (sig.astype(dtype) - offset) / abs_max
 
+#Converts float2pcm array
 def float2pcm(sig, dtype='int16'):
     sig = np.asarray(sig)
     if sig.dtype.kind != 'f':
@@ -98,144 +120,130 @@ def PowerOffLeds():
     PLAYLEDR.off()
     PLAYLEDG.off()
 
-#restart_looper() restarts this python script
-def restart_looper():
-    global MODE
-    global PRESET
-    if MODE == 0:
-        MODE = 1
-        PRESET = 4
+#Change Mode
+def Change_Mode():
+    global LoopNumber, Preset, Mode
+    if Mode == 0:
+        Mode = 1
+        Preset = 4
         PowerOffLeds()
         time.sleep(1)
-        display.value = str(PRESET)
+        display.value = str(Preset)
         os.system ("sudo -H -u raspi killall fluidsynth")
-        os.system ("sudo -H -u raspi fluidsynth -isj -a jack -r 48000 -g 0.9 -o 'midi.driver=jack' -o 'audio.jack.autoconnect=True' -o 'shell.port=9988' -f ./sf.conf /usr/share/sounds/sf2/FluidR3_GM.sf2 &")
+        os.system ("sudo -H -u raspi fluidsynth -isj -a jack -r 48000 -g 0.95 -o 'midi.driver=jack' -o 'audio.jack.autoconnect=True' -o 'shell.port=9988' -f ./sf.conf /usr/share/sounds/sf2/FluidR3_GM.sf2 &")
         return
-    if MODE == 2:
-        MODE = 0
-        time.sleep(2)
+    if Mode == 2:
+        Mode = 0
         os.system ("sudo -H -u raspi killall fluidsynth")
+        time.sleep(2)
         client.activate()
-        #os.execlp('python3', 'python3', 'RaspiLoopStation.py') #replaces current process with a new instance of the same script
 
+#Behavior when PREVBUTTON is pressed
 def prevloop():
-    global PRESET
-    global LOOPNUMBER
-    if MODE == 0 and setup_donerecording:
-        if LOOPNUMBER == 0:
-            LOOPNUMBER = 9
+    global LoopNumber, Preset
+    if Mode == 0 and setup_donerecording:
+        if LoopNumber == 0:
+            LoopNumber = 9
         else:
-            LOOPNUMBER = LOOPNUMBER-1
-        print('-= Prev Loop =---> ', LOOPNUMBER,'\n')
-    if MODE == 2:
-        if PRESET >= 1:
-            PRESET = PRESET-1
-            display.value = (str(PRESET))[-1]
+            LoopNumber = LoopNumber-1
+        print('-= Prev Loop =---> ', LoopNumber,'\n')
+    if Mode == 2:
+        if Preset >= 1:
+            Preset = Preset-1
+            display.value = (str(Preset))[-1]
             f = open("./preset.sh", "w")
-            f.write("echo 'prog 0 "+str(PRESET)+"' > /dev/tcp/localhost/9988")
+            f.write("echo 'prog 0 "+str(Preset)+"' > /dev/tcp/localhost/9988")
             f.close()
-            cmd = "sudo -H -u raspi bash ./preset.sh"
-            print('----- Preset: ', str(PRESET),'\n')
-            os.system (cmd)
+            print('----- Preset: ', str(Preset),'\n')
+            os.system ("sudo -H -u raspi bash ./preset.sh")
 
+#Behavior when NEXTBUTTON is pressed
 def nextloop():
-    global PRESET
-    global LOOPNUMBER
-    if MODE == 0 and setup_donerecording:
-        if LOOPNUMBER == 9:
-            LOOPNUMBER = 0
+    global LoopNumber, Preset
+    if Mode == 0 and setup_donerecording:
+        if LoopNumber == 9:
+            LoopNumber = 0
         else:
-            LOOPNUMBER = LOOPNUMBER+1
-        print('-= Next Loop =---> ', LOOPNUMBER,'\n')
-    if MODE == 2:
-        if PRESET <= 126:
-            PRESET = PRESET+1
-            display.value = (str(PRESET))[-1]
+            LoopNumber = LoopNumber+1
+        print('-= Next Loop =---> ', LoopNumber,'\n')
+    if Mode == 2:
+        if Preset <= 126:
+            Preset = Preset+1
+            display.value = (str(Preset))[-1]
             f = open("./preset.sh", "w")
-            f.write("echo 'prog 0 "+str(PRESET)+"' > /dev/tcp/localhost/9988")
+            f.write("echo 'prog 0 "+str(Preset)+"' > /dev/tcp/localhost/9988")
             f.close()
-            cmd = "sudo -H -u raspi bash ./preset.sh"
-            print('----- Preset: ', str(PRESET),'\n')
-            os.system (cmd)
+            print('----- Preset: ', str(Preset),'\n')
+            os.system ("sudo -H -u raspi bash ./preset.sh")
 
+#Behavior when RECBUTTON is pressed
 def setrecord():
-    global PRESET
-    if MODE == 0:
-        loops[LOOPNUMBER].set_recording()
-    if MODE == 2:
-        if PRESET >= 10:
-            PRESET = PRESET-10
+    global Preset
+    if Mode == 0:
+        loops[LoopNumber].set_recording()
+    if Mode == 2:
+        if Preset >= 10:
+            Preset = Preset-10
         changepreset()
 
+#Behavior when MUTEBUTTON is pressed
 def setmute():
-    global PRESET
+    global Preset
     global play_was_held
-    if MODE == 0 and setup_donerecording:
+    if Mode == 0 and setup_donerecording:
         if not play_was_held:
-            loops[LOOPNUMBER].toggle_mute()
+            loops[LoopNumber].toggle_mute()
         play_was_held = False
-    if MODE == 2:
-        if PRESET <= 110:
-            PRESET = PRESET+10
+    if Mode == 2:
+        if Preset <= 110:
+            Preset = Preset+10
         changepreset()
 
+#Behavior when MUTEBUTTON is held
 def setsolo():
     global play_was_held
-    if MODE == 0 and setup_donerecording:
+    if Mode == 0 and setup_donerecording:
         play_was_held = True
-        loops[LOOPNUMBER].toggle_solo()
+        loops[LoopNumber].toggle_solo()
 
+#Behavior when UNDOBUTTON is held
 def setclear():
     global undo_was_held
-    if MODE == 0 and setup_donerecording:
-        loops[LOOPNUMBER].clear()
+    if Mode == 0:
+        loops[LoopNumber].clear()
         undo_was_held = False
 
+#Behavior when UNDOBUTTON is pressed
 def setundo():
     global undo_was_held
-    if MODE == 0 and setup_donerecording:
+    if Mode == 0 and setup_donerecording:
         if not undo_was_held:
             undo_was_held = True
-            loops[LOOPNUMBER].undo()
+            loops[LoopNumber].undo()
 
+#Behavior when MODEBUTTON is held
 def changepreset():
-    global PRESET
-    display.value = (str(PRESET))[-1]
+    global Preset
+    display.value = (str(Preset))[-1]
     f = open("./preset.sh", "w")
-    f.write("echo 'prog 0 "+str(PRESET)+"' > /dev/tcp/localhost/9988")
+    f.write("echo 'prog 0 "+str(Preset)+"' > /dev/tcp/localhost/9988")
     f.close()
     cmd = "sudo -H -u raspi bash ./preset.sh"
-    print('----- Preset: ', str(PRESET),'\n')
+    print('----- Preset: ', str(Preset),'\n')
     os.system (cmd)
 
-#now defining functions of all the buttons during jam session...
+#Defining functions of all the buttons during jam session...
 PREVBUTTON.when_pressed = prevloop
 PREVBUTTON.when_released = prevloop
 NEXTBUTTON.when_pressed = nextloop
 NEXTBUTTON.when_released = nextloop
-RESTARTBUTTON.when_released = restart_looper
-RESTARTBUTTON.when_pressed = restart_looper
+MODEBUTTON.when_released = Change_Mode
+MODEBUTTON.when_pressed = Change_Mode
 RECBUTTON.when_pressed = setrecord
-#RECBUTTON.when_held =
 UNDOBUTTON.when_released = setundo
 UNDOBUTTON.when_held = setclear
 PLAYBUTTON.when_released = setmute
 PLAYBUTTON.when_held = setsolo
-
-#mixed output (sum of audio from tracks) is multiplied by output_volume before being played.
-#This is updated dynamically as max peak in resultant audio changes
-output_volume = np.float16(1.0)
-#multiplying by up_ramp and down_ramp gives fade-in and fade-out
-down_ramp = np.linspace(1, 0, CHUNK)
-up_ramp = np.linspace(0, 1, CHUNK)
-#fade_in() applies fade-in to a buffer
-def fade_in(buffer):
-    np.multiply(buffer, up_ramp, out = buffer, casting = 'unsafe')
-#fade_out() applies fade-out to a buffer
-def fade_out(buffer):
-    np.multiply(buffer, down_ramp, out = buffer, casting = 'unsafe')
-
-#pa = pyaudio.PyAudio()
 
 class audioloop:
     def __init__(self):
@@ -275,7 +283,7 @@ class audioloop:
         self.writep = (self.writep + 1) % self.length
 
     #initialize() raises self.length to closest integer multiple of LENGTH and initializes read and write pointers
-    def initialize(self): #se inicializa cuando se termina de grabar la pista. No está inicializada después de hacer Clear.
+    def initialize(self): #It initializes when recording of loop stops. It de-initializes after Clearing.
         if self.initialized:
             print('     Redundant initialization.','\n')
             return
@@ -304,7 +312,7 @@ class audioloop:
             self.length = 0
             print('loop full')
             return
-        self.main_audio[self.length, :] = np.copy(data) #Add to main_audio the buffer q actualmente está entrando por PyAudio
+        self.main_audio[self.length, :] = np.copy(data) #Add to main_audio the buffer entering through Jack
         self.length = self.length + 1 #Increase the length of the loop
 
     def toggle_mute(self):
@@ -322,20 +330,20 @@ class audioloop:
             print('-------------Solo')
             self.is_solo = True
             for i in range(9):
-                if LOOPNUMBER != i and loops[i].initialized and not loops[i].is_solo and loops[i].is_playing:
+                if LoopNumber != i and loops[i].initialized and not loops[i].is_solo and loops[i].is_playing:
                     loops[i].is_waiting_mute = True
         elif self.is_solo:
             print('-------------UnSolo')
             self.is_solo = False
             for i in range (9):
-                if LOOPNUMBER != i and loops[i].initialized:
+                if LoopNumber != i and loops[i].initialized:
                     if not loops[i].is_playing:
                         loops[i].is_waiting_play = True
                     loops[i].is_solo = False
         self.is_waiting_play = True
         debug()
 
-    #Restarting es True sólo si readp == 0 y la pista está inicializada, y sólo se comprueba cuando se termina de grabar la pista master (0)
+    #Restarting is True only when readp==0 and the loop is initialized, and is only checked after recording the Master Loop (0)
     def is_restarting(self):
         #print('-= Is Restarting =-')
         if not self.initialized:
@@ -413,7 +421,7 @@ class audioloop:
         self.writep = 0
         self.pointer_last_buffer_recorded = 0
         self.preceding_buffer = np.zeros([CHUNK], dtype = np.int16)
-        if LOOPNUMBER == 0:
+        if LoopNumber == 0:
             for loop in loops:
                 loop.is_waiting = False
                 loop.is_recording = False
@@ -437,7 +445,7 @@ class audioloop:
 
     #start recording
     def start_recording(self, previous_buffer):
-        print('-=Start Recording Track ', LOOPNUMBER,'\n')
+        print('-=Start Recording Track ', LoopNumber,'\n')
         self.is_recording = True
         self.is_waiting = False
         self.preceding_buffer = np.copy(previous_buffer)
@@ -449,7 +457,7 @@ class audioloop:
     def set_recording(self):
         global setup_is_recording
         global setup_donerecording
-        print('----- set_recording called for Track', LOOPNUMBER,'\n')
+        print('----- set_recording called for Track', LoopNumber,'\n')
         already_recording = False
 
         #if chosen track is currently recording, flag it
@@ -458,7 +466,7 @@ class audioloop:
             #turn off recording
             if not self.initialized:
                 self.initialize()
-                if LOOPNUMBER == 0:
+                if LoopNumber == 0:
                     setup_is_recording = False
                     setup_donerecording = True
                     print('---Master Track Recorded---','\n')
@@ -468,7 +476,7 @@ class audioloop:
         #unless flagged, schedule recording. If chosen track was recording, then stop recording
         #like a toggle but with delayed enabling and instant disabling
         if not already_recording:
-            if LOOPNUMBER == 0:
+            if LoopNumber == 0:
                 self.is_recording = True
                 setup_is_recording = True
             else:
@@ -483,7 +491,7 @@ def debug():
     for i in range(4):
         print(i, ' |', int(loops[i].initialized), '\t|', int(loops[i].is_recording), '\t|', int(loops[i].is_waiting), '\t|', int(loops[i].is_playing), '\t|', int(loops[i].is_waiting_play), '\t|', int(loops[i].is_waiting_mute), '\t|', int(loops[i].is_solo))
     print('setup_donerecording = ', setup_donerecording, ' setup_is_recording = ', setup_is_recording)
-    print('length = ', loops[LOOPNUMBER].length, 'LENGTH = ', LENGTH, 'length_factor = ', loops[LOOPNUMBER].length_factor,'\n')
+    print('length = ', loops[LoopNumber].length, 'LENGTH = ', LENGTH, 'length_factor = ', loops[LoopNumber].length_factor,'\n')
 
 #update output volume to prevent mixing distortion due to sample overflow
 #slow to run, so should be called on a different thread (e.g. a button callback function)
@@ -523,22 +531,22 @@ def update_volume(): #Not used
 
 #show_status() checks which loops are recording/playing and lights up LEDs accordingly
 def show_status():
-    display.value = str(LOOPNUMBER)
+    display.value = str(LoopNumber)
 
-    if loops[LOOPNUMBER].is_recording:
+    if loops[LoopNumber].is_recording:
         RECLEDR.on()
         RECLEDG.off()
-    elif loops[LOOPNUMBER].is_waiting:
+    elif loops[LoopNumber].is_waiting:
         RECLEDR.on()
         RECLEDG.on()
     elif setup_donerecording:
         RECLEDR.off()
         RECLEDG.off()
 
-    if loops[LOOPNUMBER].is_waiting_play or loops[LOOPNUMBER].is_waiting_mute:
+    if loops[LoopNumber].is_waiting_play or loops[LoopNumber].is_waiting_mute:
         PLAYLEDR.on()
         PLAYLEDG.on()
-    elif loops[LOOPNUMBER].is_playing:
+    elif loops[LoopNumber].is_playing:
         PLAYLEDR.off()
         PLAYLEDG.on()
     else:
@@ -563,9 +571,7 @@ def looping_callback(frames):
     global LENGTH
 
     # Read input buffer from JACK
-    current_rec_buffer = float2pcm(input_port.get_array())
-    #print('current_rec_buffer: ',current_rec_buffer.shape, end='\r')
-    #print(current_rec_buffer)
+    current_rec_buffer = np.right_shift(float2pcm(input_port.get_array()),2) #some input attenuation for overdub headroom purposes
 
     # Setup: First Recording
     if not setup_donerecording: #if setup is not done i.e. if the master loop hasn't been recorded to yet
@@ -586,14 +592,11 @@ def looping_callback(frames):
                 setup_is_recording = False
                 return
 
-            #otherwise append incoming audio to master loop, increment LENGTH and continue
-            loops[0].add_buffer(current_rec_buffer)
+            loops[0].add_buffer(current_rec_buffer) #otherwise append incoming audio to master loop, increment LENGTH and continue
             LENGTH += 1
             return
-        #if setup not done and not currently happening then just wait
-        else:
-            return
-    #execution ony reaches here if setup (first loop record and set LENGTH) finished.
+        else: #if setup not done and not currently happening then just wait
+            return #execution ony reaches here if setup (first loop record and set LENGTH) finished.
 
     #when master loop restarts, start recording on any other tracks that are waiting
     if loops[0].is_restarting():
@@ -601,7 +604,7 @@ def looping_callback(frames):
         for loop in loops:
             if loop.is_waiting:
                 loop.start_recording(prev_rec_buffer)
-                print('---=Recording Track number:', LOOPNUMBER, '=---','\n')
+                print('---=Recording Track number:', LoopNumber, '=---','\n')
 
      #if master loop is waiting just start recording without checking restart
     if loops[0].is_waiting and not loops[0].initialized:
@@ -612,10 +615,10 @@ def looping_callback(frames):
     for loop in loops:
         if loop.is_recording:
             if loop.initialized:
-                print('------------------------------------------------=OverDub=-', end='\r')
+                print('-=OverDub=-', end='\r')
                 loop.dub(current_rec_buffer)
             else:
-                print('------------------------------------------------=Append=-', end='\r')
+                print('-=Append=-', end='\r')
                 loop.add_buffer(current_rec_buffer)
 
     #add to play_buffer only one-fourth of each audio signal times the output_volume
@@ -658,7 +661,6 @@ with client:
     print(capture, '\n')
     if not capture:
         raise RuntimeError("No physical capture ports")
-
     for src in capture:
         client.connect(src, input_port)
 
@@ -667,7 +669,6 @@ with client:
     print(playback, '\n')
     if not playback:
         raise RuntimeError("No physical playback ports")
-
     for dest in playback:
         client.connect(output_port, dest)
 
@@ -684,10 +685,10 @@ with client:
     try:
         print("Cliente JACK activo. Presiona Ctrl+C para detener.")
         while True:
-            if MODE == 0:
+            if Mode == 0:
                 show_status()
-            elif MODE == 1:
-                MODE = 2
+            elif Mode == 1:
+                Mode = 2
             time.sleep(0.1)
             pass  # Keep Client executing
 
