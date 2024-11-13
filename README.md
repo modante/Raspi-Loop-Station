@@ -2,6 +2,9 @@
 
 **UPDATE**: Migrated to https://github.com/modante/LooPyStation
 
+
+--------------------------------
+
 Inspired on the great Raspi Looper from RandomVertebrate https://github.com/RandomVertebrate/raspi-looper
 
 Main changes:
