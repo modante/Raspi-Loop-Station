@@ -7,20 +7,6 @@ import os
 from gpiozero import LED, Button, LEDCharDisplay
 from time import sleep
 
-#Logging to file ./RaspiLoopStation.log
-import logging
-import mylib
-logger = logging.getLogger(__name__)
-
-def main():
-    logging.basicConfig(filename='RaspiLoopStation.log', level=logging.DEBUG)
-    logger.info('Started')
-    mylib.do_something()
-    logger.info('Finished')
-
-if __name__ == '__main__':
-    main()
-
 #get configuration (audio settings etc.) from file
 settings_file = open('Config/settings.prt', 'r')
 parameters = settings_file.readlines()
@@ -45,7 +31,7 @@ setup_is_recording = False #set to True when track 1 recording button is first p
 setup_donerecording = False #set to true when first track 1 recording is done
 play_was_held = False
 undo_was_held = False
-Mode = int(0)
+Mode = int(3)
 Preset = int (4)
 print('Rate: ' + str(RATE) + ' / CHUNK: ' +  str(CHUNK),'\n')
 print('Latency correction (buffers): ' + str(LATENCY),'\n')
@@ -123,20 +109,16 @@ def PowerOffLeds():
 #Change Mode
 def Change_Mode():
     global LoopNumber, Preset, Mode
-    if Mode == 0:
+    if Mode == 3:
+        Mode = 0
+    elif Mode == 0:
         Mode = 1
         Preset = 4
         PowerOffLeds()
-        time.sleep(1)
         display.value = str(Preset)
-        os.system ("sudo -H -u raspi killall fluidsynth")
-        os.system ("sudo -H -u raspi fluidsynth -isj -a jack -r 48000 -g 0.95 -o 'midi.driver=jack' -o 'audio.jack.autoconnect=True' -o 'shell.port=9988' -f ./sf.conf /usr/share/sounds/sf2/FluidR3_GM.sf2 &")
-        return
-    if Mode == 2:
+    elif Mode == 1:
         Mode = 0
-        os.system ("sudo -H -u raspi killall fluidsynth")
-        time.sleep(2)
-        client.activate()
+    print('----------= Changed to Mode = ', str(Mode),'\n')
 
 #Behavior when PREVBUTTON is pressed
 def prevloop():
@@ -147,7 +129,7 @@ def prevloop():
         else:
             LoopNumber = LoopNumber-1
         print('-= Prev Loop =---> ', LoopNumber,'\n')
-    if Mode == 2:
+    if Mode == 1:
         if Preset >= 1:
             Preset = Preset-1
             display.value = (str(Preset))[-1]
@@ -156,6 +138,13 @@ def prevloop():
             f.close()
             print('----- Preset: ', str(Preset),'\n')
             os.system ("sudo -H -u raspi bash ./preset.sh")
+
+#Behavior when PREVBUTTON is held
+def prevpreset():
+    if Mode == 1:
+        if Preset >= 10:
+            Preset = Preset-10
+        changepreset()
 
 #Behavior when NEXTBUTTON is pressed
 def nextloop():
@@ -166,7 +155,7 @@ def nextloop():
         else:
             LoopNumber = LoopNumber+1
         print('-= Next Loop =---> ', LoopNumber,'\n')
-    if Mode == 2:
+    if Mode == 1:
         if Preset <= 126:
             Preset = Preset+1
             display.value = (str(Preset))[-1]
@@ -176,50 +165,46 @@ def nextloop():
             print('----- Preset: ', str(Preset),'\n')
             os.system ("sudo -H -u raspi bash ./preset.sh")
 
-#Behavior when RECBUTTON is pressed
-def setrecord():
-    global Preset
-    if Mode == 0:
-        loops[LoopNumber].set_recording()
-    if Mode == 2:
-        if Preset >= 10:
-            Preset = Preset-10
-        changepreset()
-
-#Behavior when MUTEBUTTON is pressed
-def setmute():
-    global Preset
-    global play_was_held
-    if Mode == 0 and setup_donerecording:
-        if not play_was_held:
-            loops[LoopNumber].toggle_mute()
-        play_was_held = False
-    if Mode == 2:
+#Behavior when NEXTBUTTON is held
+def nextpreset():
+    if Mode == 1:
         if Preset <= 110:
             Preset = Preset+10
         changepreset()
 
+#Behavior when RECBUTTON is pressed
+def setrecord():
+    loops[LoopNumber].set_recording()
+
+#Behavior when MUTEBUTTON is pressed
+def setmute():
+    global play_was_held
+    if setup_donerecording:
+        if not play_was_held:
+            loops[LoopNumber].toggle_mute()
+        play_was_held = False
+
+
 #Behavior when MUTEBUTTON is held
 def setsolo():
     global play_was_held
-    if Mode == 0 and setup_donerecording:
+    if setup_donerecording:
         play_was_held = True
         loops[LoopNumber].toggle_solo()
-
-#Behavior when UNDOBUTTON is held
-def setclear():
-    global undo_was_held
-    if Mode == 0:
-        loops[LoopNumber].clear()
-        undo_was_held = False
 
 #Behavior when UNDOBUTTON is pressed
 def setundo():
     global undo_was_held
-    if Mode == 0 and setup_donerecording:
+    if setup_donerecording:
         if not undo_was_held:
             undo_was_held = True
             loops[LoopNumber].undo()
+
+#Behavior when UNDOBUTTON is held
+def setclear():
+    global undo_was_held
+    loops[LoopNumber].clear()
+    undo_was_held = False
 
 #Behavior when MODEBUTTON is held
 def changepreset():
@@ -237,13 +222,28 @@ PREVBUTTON.when_pressed = prevloop
 PREVBUTTON.when_released = prevloop
 NEXTBUTTON.when_pressed = nextloop
 NEXTBUTTON.when_released = nextloop
-MODEBUTTON.when_released = Change_Mode
 MODEBUTTON.when_pressed = Change_Mode
+MODEBUTTON.when_released = Change_Mode
 RECBUTTON.when_pressed = setrecord
 UNDOBUTTON.when_released = setundo
 UNDOBUTTON.when_held = setclear
 PLAYBUTTON.when_released = setmute
 PLAYBUTTON.when_held = setsolo
+
+display.value = " ."
+while Mode == 3:
+    print('Waiting to Start. Press MODEBUTTON', end='\r')
+    time.sleep(0.5)
+
+# Initializing JACK Client
+client = jack.Client("RaspiLoopStation")
+time.sleep(0.1)
+if client.status.server_started:
+    print('----- JACK server started', '\n')
+else:
+    print('----- JACK server not running', '\n')
+    os.system ("sudo -H -u raspi jackd -d alsa -r 48000 -p 512 -n 2 -X raw -D -C hw:H5 -P hw:H5 &")
+    time.sleep(2)
 
 class audioloop:
     def __init__(self):
@@ -531,7 +531,8 @@ def update_volume(): #Not used
 
 #show_status() checks which loops are recording/playing and lights up LEDs accordingly
 def show_status():
-    display.value = str(LoopNumber)
+    if Mode == 0:
+        display.value = str(LoopNumber)
 
     if loops[LoopNumber].is_recording:
         RECLEDR.on()
@@ -557,11 +558,6 @@ play_buffer = np.zeros([CHUNK], dtype = np.int16) #Buffer to hold mixed audio fr
 silence = np.zeros([CHUNK], dtype = np.int16) #A buffer containing silence
 current_rec_buffer = np.zeros([CHUNK], dtype = np.int16) #Buffer to hold in_data
 prev_rec_buffer = np.zeros([CHUNK], dtype = np.int16) #While looping, prev_rec_buffer keeps track of the audio buffer recorded before the current one
-
-# Initializing JACK Client
-client = jack.Client("RaspiLoopStation")
-if client.status.server_started:
-    print('----- JACK server started', '\n')
 
 # Callback de procesamiento de audio
 @client.set_process_callback
@@ -645,6 +641,30 @@ def looping_callback(frames):
 def shutdown(status, reason):
     print("JACK shutdown:", reason, status)
 
+
+#Assign all the Capture ports to Looper Input
+def all_captures_to_input():
+    capture = client.get_ports(is_audio=True, is_physical=True, is_output=True)
+    print(capture, '\n')
+    if not capture:
+        raise RuntimeError("No physical capture ports")
+    for src in capture:
+        client.connect(src, input_port)
+
+#Assign the Looper Output to all the Playback ports
+def output_to_all_playbacks():
+    playback = client.get_ports(is_audio=True, is_physical=True, is_input=True)
+    print(playback, '\n')
+    if not playback:
+        raise RuntimeError("No physical playback ports")
+    for dest in playback:
+        client.connect(output_port, dest)
+
+#Assign all the Capture ports to Looper Input
+def connect_fluidsynth_to_input():
+    client.connect('fluidsynth-midi:left', 'RaspiLoopStation:input_1')
+    client.connect('fluidsynth-midi:right', 'RaspiLoopStation:input_1')
+
 with client:
     # Getting Jack buffer size
     buffer_size = client.blocksize
@@ -656,44 +676,40 @@ with client:
     output_port = client.outports.register("output_1")
     print('----- Jack Client Out Port Registered-----\n', str(output_port),'\n')
 
-    #Assign all the Capture ports to Looper Input
-    capture = client.get_ports(is_audio=True, is_physical=True, is_output=True)
-    print(capture, '\n')
-    if not capture:
-        raise RuntimeError("No physical capture ports")
-    for src in capture:
-        client.connect(src, input_port)
-
-    #Assign the Looper Output to all the Playback ports
-    playback = client.get_ports(is_audio=True, is_physical=True, is_input=True)
-    print(playback, '\n')
-    if not playback:
-        raise RuntimeError("No physical playback ports")
-    for dest in playback:
-        client.connect(output_port, dest)
+    all_captures_to_input()
+    output_to_all_playbacks()
 
     #then we turn on Green and Red lights of REC Button to indicate that looper is ready to start looping
     print('----- Ready -----','\n')
-    RECLEDR.on()
-    RECLEDG.on()
-    PLAYLEDR.off()
-    PLAYLEDG.off()
-    #once all LEDs are on, we wait for the master loop record button to be pressed
-    print('---Waiting for Record Button---','\n')
+    show_status()
     debug()
+    #once all LEDs are on, we wait for the master loop record button to be pressed
+    print("Cliente JACK activo. Presiona Ctrl+C para detener.",'\n')
+    print('---Waiting for Record Button---','\n')
+
+    #Start FluidSynth
+    # Obtener sólo puertos MIDI de salida
+    ports = client.get_ports(is_midi=True, is_output=True)
+    print("Puertos MIDI de entrada:",'\n')
+    print(ports,'\n')
+
+    # Nombre del puerto que deseas verificar
+    target_port = 'system:midi_capture_1'
+    if any(port.name == target_port for port in ports):
+        os.system ("sudo -H -u raspi fluidsynth -isj -a jack -r 48000 -g 0.95 -o 'midi.driver=jack' -o 'audio.jack.autoconnect=True' -o 'shell.port=9988' -f ./sf.conf /usr/share/sounds/sf2/FluidR3_GM.sf2 &")
+        time.sleep(4)
+        connect_fluidsynth_to_input()
 
     try:
-        print("Cliente JACK activo. Presiona Ctrl+C para detener.")
         while True:
-            if Mode == 0:
-                show_status()
-            elif Mode == 1:
-                Mode = 2
+            show_status()
             time.sleep(0.1)
             pass  # Keep Client executing
 
     except KeyboardInterrupt:
-        print("Desactivando cliente JACK.")
+        os.system ("sudo -H -u raspi killall fluidsynth")
+        time.sleep(1)
         client.deactivate()
+        print("Desactivando cliente JACK.")
         PowerOffLeds()
         print('Done...')
